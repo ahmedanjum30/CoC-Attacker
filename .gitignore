@@ -1,0 +1,7 @@
+/target
+config.toml
+captures/
+*.onnx
+*.pt
+training/datasets/
+training/runs/

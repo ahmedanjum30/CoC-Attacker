@@ -1,0 +1,10 @@
+[package]
+name = "device"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+image.workspace = true
+serde.workspace = true
+tracing.workspace = true

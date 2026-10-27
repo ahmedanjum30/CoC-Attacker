@@ -1,0 +1,7 @@
+# Copy this file to config.toml and adjust for your machine.
+
+[device]
+# LDPlayer ships its own adb; point at it unless adb is on your PATH.
+adb_path = 'C:\LDPlayer\LDPlayer9\adb.exe'
+# First LDPlayer instance. Check with: adb devices
+serial = "emulator-5554"
