@@ -24,6 +24,12 @@ Planned: YOLO building detection (ONNX inference via `ort` + CUDA), `brain` (bas
 2. Enable ADB: Settings → Other settings → ADB debugging → *Open local connection*. Restart the emulator.
 3. Install Clash of Clans in the emulator and log in with an alt account.
 4. `cp config.example.toml config.toml` and check `adb_path` and `serial`. Run `adb devices` to see the serial.
+5. Download the OCR models (used to read loot and damage):
+   ```sh
+   mkdir -p models && cd models
+   curl -LO https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.onnx
+   curl -LO https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.onnx
+   ```
 
 ## Usage
 
@@ -35,13 +41,16 @@ cargo run -- swipe 400 360 900 360 --ms 500
 cargo run -- detect                    # which screen is showing + match scores
 cargo run -- home                      # navigate back to the village
 cargo run -- goblin --count 3          # play single-player Goblin maps
+cargo run -- attack --count 5          # search, attack, learn the best deploy strategy
+cargo run -- stats                     # damage per strategy so far
 ```
 
 ## Roadmap
 
 1. [x] ADB control: screenshots, taps, swipes
 2. [x] State machine: home → battle menu → single-player attack → results → home (button template matching)
-   - [ ] Multiplayer: find match → scout (Next button) → attack
-3. [ ] Loot OCR and skip logic
+3. [x] Loot OCR and skip logic; multiplayer search
+   - [x] Deploy planning from the red deploy border
+   - [x] Strategy learner (epsilon-greedy over logged damage %)
 4. [ ] YOLO building detection and deploy planning
 5. [ ] Learn from logged attacks

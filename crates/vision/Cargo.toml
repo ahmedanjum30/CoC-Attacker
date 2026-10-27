@@ -7,3 +7,5 @@ version.workspace = true
 anyhow.workspace = true
 image.workspace = true
 imageproc.workspace = true
+ocrs = "0.13"
+rten = "0.26"

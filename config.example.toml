@@ -5,3 +5,11 @@
 adb_path = 'C:\LDPlayer\LDPlayer9\adb.exe'
 # First LDPlayer instance. Check with: adb devices
 serial = "emulator-5554"
+
+[search]
+# Attack only bases offering at least this much gold + elixir.
+min_loot = 2000
+# Return home after skipping this many bases (each Next costs gold).
+max_searches = 20
+# Share of attacks that try a random deploy strategy instead of the best one so far.
+explore = 0.2

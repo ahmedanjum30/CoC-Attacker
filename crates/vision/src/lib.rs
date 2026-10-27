@@ -3,6 +3,10 @@
 //!
 //! All coordinates assume a 1280x720 frame.
 
+pub mod deploy;
+pub mod hud;
+pub mod ocr;
+
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -20,17 +24,25 @@ pub enum Button {
     FindMatch,
     SinglePlayerAttack,
     EndBattle,
+    Surrender,
+    Next,
     ReturnHome,
+    ArmyAttack,
+    CloseWindow,
 }
 
 impl Button {
-    pub const ALL: [Button; 6] = [
+    pub const ALL: [Button; 10] = [
         Button::HomeBattle,
         Button::MenuPracticeTab,
         Button::FindMatch,
         Button::SinglePlayerAttack,
         Button::EndBattle,
+        Button::Surrender,
+        Button::Next,
         Button::ReturnHome,
+        Button::ArmyAttack,
+        Button::CloseWindow,
     ];
 
     fn file_name(self) -> &'static str {
@@ -40,7 +52,11 @@ impl Button {
             Button::FindMatch => "find_match.png",
             Button::SinglePlayerAttack => "single_player_attack.png",
             Button::EndBattle => "end_battle.png",
+            Button::Surrender => "surrender.png",
+            Button::Next => "next.png",
             Button::ReturnHome => "return_home.png",
+            Button::ArmyAttack => "army_attack.png",
+            Button::CloseWindow => "close_x.png",
         }
     }
 
@@ -53,8 +69,11 @@ impl Button {
             Button::FindMatch => Rect::at(100, 450).of_size(400, 140),
             // The Attack button follows the next unbeaten map, so search the whole map panel.
             Button::SinglePlayerAttack => Rect::at(40, 140).of_size(720, 480),
-            Button::EndBattle => Rect::at(0, 480).of_size(220, 110),
+            Button::EndBattle | Button::Surrender => Rect::at(0, 480).of_size(220, 110),
+            Button::Next => Rect::at(1040, 450).of_size(240, 120),
             Button::ReturnHome => Rect::at(480, 540).of_size(320, 160),
+            Button::ArmyAttack => Rect::at(980, 590).of_size(290, 100),
+            Button::CloseWindow => Rect::at(1170, 20).of_size(110, 90),
         }
     }
 }
@@ -63,6 +82,9 @@ impl Button {
 pub enum Screen {
     Home,
     BattleMenu,
+    ArmyWindow,
+    /// Looking at an enemy base before deploying; Next is available.
+    Scouting,
     Battle,
     Results,
     Unknown,
@@ -157,8 +179,12 @@ impl Vision {
         // The battle menu overlays the home screen, so check it before Home.
         if visible(Button::ReturnHome) {
             Screen::Results
-        } else if visible(Button::EndBattle) {
+        } else if visible(Button::Next) {
+            Screen::Scouting
+        } else if visible(Button::EndBattle) || visible(Button::Surrender) {
             Screen::Battle
+        } else if visible(Button::ArmyAttack) {
+            Screen::ArmyWindow
         } else if visible(Button::MenuPracticeTab) {
             Screen::BattleMenu
         } else if visible(Button::HomeBattle) {

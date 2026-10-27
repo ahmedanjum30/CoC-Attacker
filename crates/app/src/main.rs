@@ -1,4 +1,5 @@
 mod bot;
+mod strategy;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -7,9 +8,14 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use device::{Device, DeviceConfig};
 use serde::Deserialize;
+use bot::SearchConfig;
+use strategy::Learner;
+use vision::ocr::{Ocr, TextColor};
 use vision::{Button, Vision};
 
 const TEMPLATES_DIR: &str = "assets/templates";
+const MODELS_DIR: &str = "models";
+const ATTACK_LOG: &str = "data/attacks.jsonl";
 
 #[derive(Parser)]
 #[command(about = "Clash of Clans attack bot")]
@@ -55,6 +61,29 @@ enum Cmd {
         #[arg(long, default_value_t = 1)]
         count: u32,
     },
+    /// Search for bases and attack them, learning which deploy strategy works best.
+    Attack {
+        #[arg(long, default_value_t = 1)]
+        count: u32,
+    },
+    /// Show how each deploy strategy has performed. Needs no device.
+    Stats,
+    /// Draw the deploy zone found in a saved image. Needs no device.
+    Plan {
+        input: PathBuf,
+        #[arg(long, default_value = "captures/plan.png")]
+        out: PathBuf,
+    },
+    /// Read text from a region of a saved image. Needs no device.
+    Ocr {
+        input: PathBuf,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        #[arg(long, value_enum, default_value_t = OcrColor::White)]
+        color: OcrColor,
+    },
     /// Cut a region out of an image (for making templates). Needs no device.
     Crop {
         input: PathBuf,
@@ -66,9 +95,17 @@ enum Cmd {
     },
 }
 
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum OcrColor {
+    White,
+    Green,
+}
+
 #[derive(Deserialize)]
 struct Config {
     device: DeviceConfig,
+    #[serde(default)]
+    search: SearchConfig,
 }
 
 fn main() -> Result<()> {
@@ -79,9 +116,49 @@ fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    if let Cmd::Stats = &cli.command {
+        print_stats(&Learner::load(PathBuf::from(ATTACK_LOG), 0.0)?);
+        return Ok(());
+    }
     if let Cmd::Crop { input, x, y, w, h, out } = &cli.command {
         let img = image::open(input)?.crop_imm(*x, *y, *w, *h);
         img.save(out)?;
+        return Ok(());
+    }
+    if let Cmd::Ocr { input, x, y, w, h, color } = &cli.command {
+        let ocr = vision::ocr::Ocr::load(Path::new(MODELS_DIR))?;
+        let frame = image::open(input)?.to_rgb8();
+        let start = Instant::now();
+        let area = imageproc::rect::Rect::at(*x, *y).of_size(*w, *h);
+        let color = match color {
+            OcrColor::White => TextColor::White,
+            OcrColor::Green => TextColor::Green,
+        };
+        let text = ocr.read(&frame, area, color)?;
+        tracing::info!("{text:?} (took {:?})", start.elapsed());
+        return Ok(());
+    }
+    if let Cmd::Plan { input, out } = &cli.command {
+        let mut frame = image::open(input)?.to_rgb8();
+        let start = Instant::now();
+        match vision::deploy::find_deploy_zone(&frame, 32) {
+            Some(zone) => {
+                tracing::info!(
+                    "centre {:?}, {} points (took {:?})",
+                    zone.center,
+                    zone.points.len(),
+                    start.elapsed()
+                );
+                let c = (zone.center.0 as i32, zone.center.1 as i32);
+                imageproc::drawing::draw_filled_circle_mut(&mut frame, c, 6, image::Rgb([0, 0, 255]));
+                for p in &zone.points {
+                    let pos = (p.pos.0 as i32, p.pos.1 as i32);
+                    imageproc::drawing::draw_filled_circle_mut(&mut frame, pos, 5, image::Rgb([0, 255, 255]));
+                }
+                frame.save(out)?;
+            }
+            None => tracing::info!("no deploy border visible"),
+        }
         return Ok(());
     }
     if let Cmd::Detect { image: Some(path) } = &cli.command {
@@ -123,17 +200,44 @@ fn main() -> Result<()> {
             device.swipe((x1, y1), (x2, y2), Duration::from_millis(ms))?
         }
         Cmd::Detect { .. } => detect(&image::DynamicImage::from(device.screenshot()?).to_rgb8())?,
-        Cmd::Home => bot::Bot::new(device, Vision::load(Path::new(TEMPLATES_DIR))?).go_home()?,
+        Cmd::Home => make_bot(device)?.go_home()?,
         Cmd::Goblin { count } => {
-            let bot = bot::Bot::new(device, Vision::load(Path::new(TEMPLATES_DIR))?);
+            let bot = make_bot(device)?;
             for i in 1..=count {
                 tracing::info!("goblin attack {i}/{count}");
                 bot.goblin_attack()?;
             }
         }
-        Cmd::Crop { .. } => unreachable!("handled before connecting"),
+        Cmd::Attack { count } => {
+            let bot = make_bot(device)?;
+            let mut learner = Learner::load(PathBuf::from(ATTACK_LOG), config.search.explore)?;
+            for i in 1..=count {
+                tracing::info!("multiplayer attack {i}/{count}");
+                if !bot.multiplayer_attack(&config.search, &mut learner)? {
+                    break;
+                }
+            }
+            print_stats(&learner);
+        }
+        Cmd::Stats | Cmd::Crop { .. } | Cmd::Ocr { .. } | Cmd::Plan { .. } => {
+            unreachable!("handled before connecting")
+        }
     }
     Ok(())
+}
+
+fn make_bot(device: Device) -> Result<bot::Bot> {
+    Ok(bot::Bot::new(
+        device,
+        Vision::load(Path::new(TEMPLATES_DIR))?,
+        Ocr::load(Path::new(MODELS_DIR))?,
+    ))
+}
+
+fn print_stats(learner: &Learner) {
+    for (strategy, mean, n) in learner.stats() {
+        tracing::info!("  {:<12} {n:>3} attacks, mean damage {mean:.1}%", format!("{strategy:?}"));
+    }
 }
 
 fn detect(frame: &image::RgbImage) -> Result<()> {

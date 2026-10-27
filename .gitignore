@@ -5,3 +5,5 @@ captures/
 *.pt
 training/datasets/
 training/runs/
+models/
+data/
