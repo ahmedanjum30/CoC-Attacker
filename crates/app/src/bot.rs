@@ -39,6 +39,9 @@ const MONITOR_INTERVAL: Duration = Duration::from_secs(3);
 /// No damage gained for this long counts as a stalled attack.
 const STALL_TIME: Duration = Duration::from_secs(9);
 
+/// Where scouted bases are saved for labelling.
+const DATASET_DIR: &str = "dataset/raw";
+
 const POLL: Duration = Duration::from_millis(500);
 /// Extra frames to check for the deploy border before using fallback points.
 const BORDER_RETRIES: usize = 4;
@@ -54,11 +57,13 @@ pub struct SearchConfig {
     pub max_searches: u32,
     /// Share of attacks that try a random deploy strategy instead of the best one.
     pub explore: f64,
+    /// Save every scouted base to dataset/raw/ for training building detection.
+    pub save_bases: bool,
 }
 
 impl Default for SearchConfig {
     fn default() -> Self {
-        Self { min_loot: 2000, max_searches: 20, explore: 0.2 }
+        Self { min_loot: 2000, max_searches: 20, explore: 0.2, save_bases: true }
     }
 }
 
@@ -123,6 +128,10 @@ impl Bot {
             let (screen, frame) =
                 self.wait_for_any(&[Screen::Scouting, Screen::Battle], Duration::from_secs(60))?;
             searches += 1;
+            if search.save_bases {
+                std::fs::create_dir_all(DATASET_DIR)?;
+                frame.save(format!("{DATASET_DIR}/{}_{searches}.png", unix_now()?))?;
+            }
             let loot = hud::enemy_loot(&self.ocr, &frame)?;
             tracing::info!(
                 "base {searches}: {} gold, {} elixir",

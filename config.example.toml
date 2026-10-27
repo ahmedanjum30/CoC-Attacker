@@ -13,3 +13,5 @@ min_loot = 2000
 max_searches = 20
 # Share of attacks that try a random deploy strategy instead of the best one so far.
 explore = 0.2
+# Save every scouted base to dataset/raw/ (training data for building detection).
+save_bases = true

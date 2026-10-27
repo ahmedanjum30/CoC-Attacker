@@ -1,0 +1,17 @@
+town_hall
+cannon
+archer_tower
+mortar
+air_defense
+wizard_tower
+gold_storage
+elixir_storage
+gold_mine
+elixir_collector
+army_camp
+barracks
+laboratory
+builder_hut
+clan_castle
+wall
+other
