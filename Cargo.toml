@@ -1,7 +1,17 @@
 [workspace]
 resolver = "3"
-members = ["crates/device", "crates/app"]
+members = ["crates/device", "crates/vision", "crates/app"]
 default-members = ["crates/app"]
+
+# Image processing is painfully slow unoptimised, even in dev builds.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package.vision]
+opt-level = 3
 
 [workspace.package]
 edition = "2024"
@@ -11,9 +21,11 @@ version = "0.1.0"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+imageproc = "0.25"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 device = { path = "crates/device" }
+vision = { path = "crates/vision" }

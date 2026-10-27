@@ -1,0 +1,9 @@
+[package]
+name = "vision"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+image.workspace = true
+imageproc.workspace = true

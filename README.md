@@ -13,9 +13,10 @@ Emulator ──frames──▶ vision (YOLO + digit OCR) ──▶ brain (evalua
 | Crate | Purpose |
 |---|---|
 | `crates/device` | ADB connection, screenshots, taps and swipes |
-| `crates/app` | CLI and, later, the game state machine |
+| `crates/vision` | Template matching for buttons; screen classification |
+| `crates/app` | CLI and the game state machine (`bot.rs`) |
 
-Planned: `vision` (ONNX inference via `ort` + CUDA), `brain` (base evaluation, deploy planning) and `training/` (Python, model training only).
+Planned: YOLO building detection (ONNX inference via `ort` + CUDA), `brain` (base evaluation, deploy planning) and `training/` (Python, model training only).
 
 ## Setup
 
@@ -31,12 +32,16 @@ cargo run -- info                      # check connection and resolution
 cargo run -- screenshot                # save captures/screen.png
 cargo run -- tap 640 360
 cargo run -- swipe 400 360 900 360 --ms 500
+cargo run -- detect                    # which screen is showing + match scores
+cargo run -- home                      # navigate back to the village
+cargo run -- goblin --count 3          # play single-player Goblin maps
 ```
 
 ## Roadmap
 
 1. [x] ADB control: screenshots, taps, swipes
-2. [ ] State machine: home → find match → scout → attack → return (button template matching)
+2. [x] State machine: home → battle menu → single-player attack → results → home (button template matching)
+   - [ ] Multiplayer: find match → scout (Next button) → attack
 3. [ ] Loot OCR and skip logic
 4. [ ] YOLO building detection and deploy planning
 5. [ ] Learn from logged attacks

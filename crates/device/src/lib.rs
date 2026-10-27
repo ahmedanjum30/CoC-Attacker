@@ -87,6 +87,12 @@ impl Device {
         Ok(())
     }
 
+    /// Presses the Android back button (closes menus and dialogs).
+    pub fn back(&self) -> Result<()> {
+        self.adb(&["shell", "input", "keyevent", "4"])?;
+        Ok(())
+    }
+
     /// Runs an adb command against this device.
     fn adb(&self, args: &[&str]) -> Result<Output> {
         let mut full = vec!["-s", self.cfg.serial.as_str()];
