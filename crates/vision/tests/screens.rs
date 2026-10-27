@@ -28,6 +28,9 @@ fn classifies_every_capture() {
         ("mp_battle.png", Screen::Battle),
         ("mp_result.png", Screen::Results),
         ("army_window.png", Screen::ArmyWindow),
+        ("army_empty.png", Screen::ArmyWindow),
+        ("army_not_full.png", Screen::ArmyWindow),
+        ("army_tabs.png", Screen::ArmyWindow),
     ] {
         assert_eq!(v.screen(&frame(file)), expected, "{file}");
     }
@@ -70,4 +73,36 @@ fn finds_deploy_border_only_when_shown() {
     for file in ["home.png", "home_alt.png", "mp_battle.png", "result.png"] {
         assert!(vision::deploy::find_deploy_zone(&frame(file), 32).is_none(), "{file}");
     }
+}
+
+#[test]
+fn reads_army_editor() {
+    let ocr = vision::ocr::Ocr::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models"))
+        .expect("OCR models missing: see README");
+    let editor = frame("army_editor.png");
+
+    let cards = vision::hud::editor_cards(&ocr, &editor).unwrap();
+    let unlocked: Vec<_> = cards.iter().filter(|c| c.unlocked).collect();
+    assert_eq!(unlocked.len(), 1, "only Barbarians are unlocked");
+    assert_eq!(unlocked[0].index, 0);
+    assert_eq!(unlocked[0].level, Some(1));
+
+    assert_eq!(vision::hud::army_capacity(&ocr, &editor).unwrap(), Some((20, 20)));
+    assert_eq!(vision::hud::live_damage(&ocr, &frame("mp_battle.png")).unwrap(), Some(0));
+}
+
+#[test]
+fn reads_partly_filled_army_and_more_unlocks() {
+    let ocr = vision::ocr::Ocr::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models"))
+        .expect("OCR models missing: see README");
+
+    let not_full = frame("army_not_full.png");
+    assert_eq!(vision::hud::army_capacity(&ocr, &not_full).unwrap(), Some((20, 30)));
+
+    let editor = frame("army_editor_three.png");
+    assert_eq!(vision::hud::army_capacity(&ocr, &editor).unwrap(), Some((0, 30)));
+    let cards = vision::hud::editor_cards(&ocr, &editor).unwrap();
+    let unlocked: Vec<usize> = cards.iter().filter(|c| c.unlocked).map(|c| c.index).collect();
+    // Barbarian, Archer, Giant.
+    assert_eq!(unlocked, [0, 1, 2]);
 }

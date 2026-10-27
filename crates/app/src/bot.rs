@@ -3,7 +3,7 @@
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use device::Device;
 use image::{DynamicImage, RgbImage};
 use serde::Deserialize;
@@ -12,6 +12,7 @@ use vision::hud;
 use vision::ocr::Ocr;
 use vision::{Button, Screen, Vision};
 
+use crate::army::{ArmyEntry, Catalog, Role};
 use crate::strategy::{AttackRecord, Learner, Strategy};
 
 const SINGLE_PLAYER_TAB: (u32, u32) = (400, 56);
@@ -20,6 +21,23 @@ const DEPLOY_RAYS: usize = 32;
 /// Used when no deploy border can be found (e.g. single-player maps whose
 /// border runs off screen). Taps inside a no-deploy zone are ignored by the game.
 const FALLBACK_POINTS: [(u32, u32); 5] = [(120, 250), (120, 280), (120, 310), (640, 60), (1150, 300)];
+
+/// Fixed spots in the battle menu and army editor.
+const EDIT_ARMY: (u32, u32) = (150, 680);
+const TROOP_ROW: (u32, u32) = (800, 240);
+const CLEAR_ARMY: (u32, u32) = (1237, 166);
+/// Dimmed area above the troop drawer; tapping it closes the drawer.
+const CLOSE_DRAWER: (u32, u32) = (640, 110);
+/// How many of the strongest buildable armies the learner chooses between.
+const ARMY_CANDIDATES: usize = 3;
+
+/// Pause between deploy waves so earlier troops engage first.
+const WAVE_GAP: Duration = Duration::from_millis(1500);
+/// Share of each damage-dealing troop held back for the second push.
+const RESERVE_PERCENT: u32 = 25;
+const MONITOR_INTERVAL: Duration = Duration::from_secs(3);
+/// No damage gained for this long counts as a stalled attack.
+const STALL_TIME: Duration = Duration::from_secs(9);
 
 const POLL: Duration = Duration::from_millis(500);
 /// Extra frames to check for the deploy border before using fallback points.
@@ -44,20 +62,36 @@ impl Default for SearchConfig {
     }
 }
 
+/// What happened at deploy time, needed to run the rest of the battle.
+struct Deployment {
+    /// False if the border wasn't found and fallback points were used.
+    planned: bool,
+    /// Troops held back: (slot tap point, count).
+    reserve: Vec<((u32, u32), u32)>,
+    reserve_points: Vec<(u32, u32)>,
+}
+
 pub struct Bot {
     device: Device,
     vision: Vision,
     ocr: Ocr,
+    catalog: Catalog,
 }
 
 impl Bot {
-    pub fn new(device: Device, vision: Vision, ocr: Ocr) -> Self {
-        Self { device, vision, ocr }
+    pub fn new(device: Device, vision: Vision, ocr: Ocr, catalog: Catalog) -> Self {
+        Self { device, vision, ocr, catalog }
     }
 
     /// Searches for a base worth attacking, attacks it and records the result.
     /// Returns false if no suitable base was found.
-    pub fn multiplayer_attack(&self, search: &SearchConfig, learner: &mut Learner) -> Result<bool> {
+    pub fn multiplayer_attack(
+        &self,
+        search: &SearchConfig,
+        learner: &mut Learner,
+        army_name: &str,
+        army: &[ArmyEntry],
+    ) -> Result<bool> {
         self.go_home()?;
         let frame = self.frame()?;
         self.tap_button(&frame, Button::HomeBattle)?;
@@ -113,15 +147,18 @@ impl Bot {
             sleep(Duration::from_millis(1500));
         };
 
-        let strategy = learner.choose();
-        tracing::info!("attacking with strategy {strategy:?}");
-        let planned = self.deploy(&frame, strategy)?;
+        let strategy = learner.choose_strategy();
+        tracing::info!("attacking with {army_name} using strategy {strategy:?}");
+        let deployment = self.deploy(&frame, strategy, Some(army))?;
+        let planned = deployment.planned;
+        self.manage_battle(deployment)?;
 
         let damage = self.finish_battle()?;
         // A fallback deploy says nothing about the strategy, so don't learn from it.
         if planned {
             learner.record(AttackRecord {
                 unix_time: unix_now()?,
+                army: army_name.to_string(),
                 strategy,
                 gold: loot.gold,
                 elixir: loot.elixir,
@@ -145,7 +182,8 @@ impl Bot {
         self.device.tap(attack.0, attack.1)?;
         let frame = self.wait_for(Screen::Battle, Duration::from_secs(20))?;
 
-        self.deploy(&frame, Strategy::Surround)?;
+        let deployment = self.deploy(&frame, Strategy::Surround, None)?;
+        self.manage_battle(deployment)?;
         self.finish_battle()?;
         Ok(())
     }
@@ -162,7 +200,7 @@ impl Bot {
                 Screen::Results => self.tap_button(&frame, Button::ReturnHome)?,
                 // Never abandon a battle on our own; it ends by itself.
                 Screen::Battle => tracing::info!("battle in progress, waiting"),
-                Screen::ArmyWindow => self.tap_button(&frame, Button::CloseWindow)?,
+                Screen::ArmyWindow | Screen::Window => self.tap_button(&frame, Button::CloseWindow)?,
                 Screen::Scouting => {
                     tracing::info!("leaving the enemy base without attacking");
                     self.tap_button(&frame, Button::EndBattle)?
@@ -174,9 +212,81 @@ impl Bot {
         bail!("could not reach the home screen");
     }
 
-    /// Deploys every troop in the bar across the strategy's points. Returns
-    /// false if the border wasn't found and fallback points were used instead.
-    fn deploy(&self, frame: &RgbImage, strategy: Strategy) -> Result<bool> {
+    /// Reads the unlocked troops, picks an army (strongest few the account can
+    /// build, chosen by past results) and sets it in the army editor.
+    pub fn prepare_army(&self, learner: &Learner) -> Result<(String, Vec<ArmyEntry>)> {
+        self.go_home()?;
+        let frame = self.frame()?;
+        self.tap_button(&frame, Button::HomeBattle)?;
+        self.wait_for(Screen::BattleMenu, Duration::from_secs(10))?;
+        self.device.tap(EDIT_ARMY.0, EDIT_ARMY.1)?;
+        let frame = self.wait_for(Screen::ArmyWindow, Duration::from_secs(10))?;
+        let (used, capacity) = hud::army_capacity(&self.ocr, &frame)?
+            .ok_or_else(|| anyhow!("could not read the army camp capacity"))?;
+
+        self.device.tap(TROOP_ROW.0, TROOP_ROW.1)?;
+        sleep(Duration::from_millis(1500));
+        let cards = hud::editor_cards(&self.ocr, &self.frame()?)?;
+        let unlocked: Vec<usize> = cards.iter().filter(|c| c.unlocked).map(|c| c.index).collect();
+        for c in cards.iter().filter(|c| c.unlocked) {
+            let name = self.catalog.troop_at(c.index).map_or("?", |t| t.name.as_str());
+            let level = c.level.map_or("?".into(), |l| l.to_string());
+            tracing::info!("unlocked: {name} (level {level})");
+        }
+
+        let candidates: Vec<String> = self
+            .catalog
+            .available(&unlocked)
+            .iter()
+            .take(ARMY_CANDIDATES)
+            .map(|a| a.name.clone())
+            .collect();
+        if candidates.is_empty() {
+            bail!("no army in armies.toml can be built from the unlocked troops");
+        }
+        let name = learner.choose_army(&candidates);
+        let army = self.catalog.armies.iter().find(|a| a.name == name).unwrap();
+        let plan = self.catalog.plan(army, capacity);
+        let summary: Vec<String> = plan.iter().map(|e| format!("{} x{}", e.name, e.count)).collect();
+        tracing::info!("army {name} for {capacity} space: {}", summary.join(", "));
+
+        // With a single troop type unlocked, a full camp already holds the plan.
+        if !(unlocked.len() == 1 && used == capacity) {
+            if used > 0 {
+                // The trash button only works with the troop drawer closed,
+                // and asks for confirmation.
+                self.device.tap(CLOSE_DRAWER.0, CLOSE_DRAWER.1)?;
+                sleep(Duration::from_millis(800));
+                self.device.tap(CLEAR_ARMY.0, CLEAR_ARMY.1)?;
+                let okay = self.wait_for_button(Button::Okay, Duration::from_secs(5))?;
+                self.device.tap(okay.0, okay.1)?;
+                sleep(Duration::from_millis(800));
+                self.device.tap(TROOP_ROW.0, TROOP_ROW.1)?;
+                sleep(Duration::from_millis(1500));
+            }
+            for entry in &plan {
+                let pos = cards[entry.card].pos;
+                for _ in 0..entry.count {
+                    self.device.tap(pos.0, pos.1)?;
+                }
+            }
+            sleep(Duration::from_millis(800));
+            let filled = hud::army_capacity(&self.ocr, &self.frame()?)?;
+            if filled != Some((capacity, capacity)) {
+                tracing::warn!("army camp shows {filled:?} after filling, expected {capacity}/{capacity}");
+            }
+        }
+        // With the troop drawer open the window isn't recognisable, so close it first.
+        self.device.tap(CLOSE_DRAWER.0, CLOSE_DRAWER.1)?;
+        sleep(Duration::from_millis(800));
+        self.go_home()?;
+        Ok((name, plan))
+    }
+
+    /// Deploys the army in waves by role (tanks first, support last) over the
+    /// strategy's points, holding back part of the damage dealers. Returns
+    /// whether the deploy border was found, and the plan for the reserve.
+    fn deploy(&self, frame: &RgbImage, strategy: Strategy, army: Option<&[ArmyEntry]>) -> Result<Deployment> {
         // The border can lag behind the clouds clearing, so give it a moment.
         let mut zone = find_deploy_zone(frame, DEPLOY_RAYS);
         let mut last = None;
@@ -189,33 +299,112 @@ impl Bot {
             zone = find_deploy_zone(&f, DEPLOY_RAYS);
             last = Some(f);
         }
-        let points = match &zone {
+        let (points, reserve_points) = match &zone {
             Some(zone) => {
                 tracing::debug!("deploy zone: centre {:?}, {} points", zone.center, zone.points.len());
-                strategy.points(zone)
+                (strategy.points(zone), strategy.reserve_points(zone))
             }
             None => {
                 let path = format!("captures/no_border_{}.png", unix_now()?);
                 tracing::warn!("no deploy border found, using fallback points (frame saved to {path})");
                 std::fs::create_dir_all("captures")?;
                 last.as_ref().unwrap_or(frame).save(&path)?;
-                FALLBACK_POINTS.to_vec()
+                (FALLBACK_POINTS.to_vec(), FALLBACK_POINTS.to_vec())
             }
         };
 
-        let slots = hud::troop_slots(&self.ocr, frame)?;
+        let mut slots = hud::troop_slots(&self.ocr, frame)?;
         if slots.is_empty() {
             bail!("no troops in the battle bar");
         }
-        for slot in slots {
-            tracing::info!("deploying {} troops from slot {:?} over {} points", slot.count, slot.pos, points.len());
-            self.device.tap(slot.pos.0, slot.pos.1)?;
-            for i in 0..slot.count as usize {
-                let (x, y) = points[i % points.len()];
-                self.device.tap(x, y)?;
+        // The battle bar lists troops in the same order as the army editor,
+        // so the planned army tells us each slot's role. Its counts are also
+        // more reliable than OCR of the small "x15" labels.
+        let roles: Vec<Role> = match army {
+            Some(a) if a.len() == slots.len() => {
+                for (slot, entry) in slots.iter_mut().zip(a) {
+                    slot.count = slot.count.min(entry.count);
+                }
+                a.iter().map(|e| e.role).collect()
+            }
+            _ => vec![Role::Damage; slots.len()],
+        };
+        let mut order: Vec<usize> = (0..slots.len()).collect();
+        order.sort_by_key(|&i| roles[i].wave());
+
+        // Tanks go to the middle of the chosen side so they draw fire first.
+        let middle = &points[points.len() / 3..(points.len() * 2 / 3).max(points.len() / 3 + 1)];
+        let mut reserve = Vec::new();
+        let mut last_wave = None;
+        for i in order {
+            let (slot, role) = (slots[i], roles[i]);
+            if last_wave.is_some_and(|w| w != role.wave()) {
+                // Give the previous wave a moment to engage.
+                sleep(WAVE_GAP);
+            }
+            last_wave = Some(role.wave());
+
+            let held = if role == Role::Damage && strategy != Strategy::Surround {
+                slot.count * RESERVE_PERCENT / 100
+            } else {
+                0
+            };
+            let targets = if role == Role::Tank { middle } else { &points[..] };
+            tracing::info!(
+                "wave {}: {} x{role:?} over {} points{}",
+                role.wave(),
+                slot.count - held,
+                targets.len(),
+                if held > 0 { format!(", {held} held back") } else { String::new() }
+            );
+            self.drop_troops(slot.pos, slot.count - held, targets)?;
+            if held > 0 {
+                reserve.push((slot.pos, held));
             }
         }
-        Ok(zone.is_some())
+        Ok(Deployment { planned: zone.is_some(), reserve, reserve_points })
+    }
+
+    /// Watches the live damage and sends the reserve to another side once the
+    /// attack stalls, then waits for the battle to end.
+    fn manage_battle(&self, mut deployment: Deployment) -> Result<()> {
+        let start = Instant::now();
+        let (mut best, mut last_gain) = (0, Instant::now());
+        while start.elapsed() < BATTLE_TIMEOUT {
+            sleep(MONITOR_INTERVAL);
+            let frame = self.frame()?;
+            if self.vision.screen(&frame) != Screen::Battle {
+                return Ok(());
+            }
+            if deployment.reserve.is_empty() {
+                continue;
+            }
+            if let Some(d) = hud::live_damage(&self.ocr, &frame)?
+                && d > best
+            {
+                (best, last_gain) = (d, Instant::now());
+            }
+            if last_gain.elapsed() >= STALL_TIME {
+                tracing::info!("attack stalled at {best}%, sending the reserve to the next side");
+                for (pos, count) in std::mem::take(&mut deployment.reserve) {
+                    self.drop_troops(pos, count, &deployment.reserve_points)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Selects a troop slot and drops `count` troops spread over `points`.
+    fn drop_troops(&self, slot: (u32, u32), count: u32, points: &[(u32, u32)]) -> Result<()> {
+        if count == 0 || points.is_empty() {
+            return Ok(());
+        }
+        self.device.tap(slot.0, slot.1)?;
+        for i in 0..count as usize {
+            let (x, y) = points[i % points.len()];
+            self.device.tap(x, y)?;
+        }
+        Ok(())
     }
 
     /// Waits for the results, reads the damage and returns home.

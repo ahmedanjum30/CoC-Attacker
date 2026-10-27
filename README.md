@@ -41,9 +41,16 @@ cargo run -- swipe 400 360 900 360 --ms 500
 cargo run -- detect                    # which screen is showing + match scores
 cargo run -- home                      # navigate back to the village
 cargo run -- goblin --count 3          # play single-player Goblin maps
-cargo run -- attack --count 5          # search, attack, learn the best deploy strategy
+cargo run -- army                      # read unlocked troops, pick and set the best army
+cargo run -- attack --count 5          # set army, search, attack, learn what works best
 cargo run -- stats                     # damage per strategy so far
 ```
+
+## Armies
+
+The bot reads which troops are unlocked in the army editor, then chooses among the strongest compositions in [assets/armies.toml](assets/armies.toml) that you can build, learning from your results which one performs best. Edit that file to add armies or follow the current meta; troop stats live in [assets/troops.toml](assets/troops.toml).
+
+Troops deploy in waves by role (tanks, wall breakers, air, damage, raiders, support). A quarter of the damage dealers is held back and sent to the next side if the live damage stops rising.
 
 ## Roadmap
 
@@ -52,5 +59,6 @@ cargo run -- stats                     # damage per strategy so far
 3. [x] Loot OCR and skip logic; multiplayer search
    - [x] Deploy planning from the red deploy border
    - [x] Strategy learner (epsilon-greedy over logged damage %)
-4. [ ] YOLO building detection and deploy planning
-5. [ ] Learn from logged attacks
+4. [x] Army selection from unlocked troops; role-based waves; live reserve
+5. [ ] YOLO building detection and deploy planning
+6. [ ] Per-base prediction from logged attacks

@@ -1,0 +1,34 @@
+# Army compositions, strongest first. The bot considers every army whose
+# troops are all unlocked, prefers the first few listed, and then learns from
+# your own attack results which of them actually performs best.
+#
+# Shares are fractions of camp space (they should add up to about 1.0).
+# Add or reorder armies here to follow what's working in the current meta.
+
+[[army]]
+name = "Mass Dragon"
+troops = { "Dragon" = 0.85, "Balloon" = 0.15 }
+
+[[army]]
+name = "GiWiz"
+troops = { "Giant" = 0.40, "Wizard" = 0.40, "Wall Breaker" = 0.10, "Archer" = 0.10 }
+
+[[army]]
+name = "Balloon Barch"
+troops = { "Balloon" = 0.50, "Barbarian" = 0.20, "Archer" = 0.30 }
+
+[[army]]
+name = "GiBarch"
+troops = { "Giant" = 0.35, "Wall Breaker" = 0.10, "Barbarian" = 0.25, "Archer" = 0.30 }
+
+[[army]]
+name = "Goblin Raid"
+troops = { "Giant" = 0.25, "Wall Breaker" = 0.15, "Goblin" = 0.60 }
+
+[[army]]
+name = "Barch"
+troops = { "Barbarian" = 0.50, "Archer" = 0.50 }
+
+[[army]]
+name = "Barbarians"
+troops = { "Barbarian" = 1.0 }

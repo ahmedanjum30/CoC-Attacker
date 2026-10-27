@@ -43,6 +43,16 @@ impl Strategy {
             Strategy::Surround => pts.iter().map(|p| p.pos).collect(),
         }
     }
+
+    /// Where the reserve goes if the first push stalls: the quarter of the
+    /// border next to the main attack, so it sweeps around the base.
+    pub fn reserve_points(self, zone: &DeployZone) -> Vec<(u32, u32)> {
+        let pts = &zone.points;
+        let n = pts.len();
+        let quarter = (n / 4).max(1);
+        let start = best_arc_start(pts, quarter) + quarter;
+        (0..quarter).map(|k| pts[(start + k) % n].pos).collect()
+    }
 }
 
 /// Start of the run of `len` consecutive points where the border is closest
@@ -59,13 +69,21 @@ fn best_arc_start(pts: &[DeployPoint], len: usize) -> usize {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AttackRecord {
     pub unix_time: u64,
+    /// Army composition name; records from before armies were tracked
+    /// were all Barbarians.
+    #[serde(default = "default_army")]
+    pub army: String,
     pub strategy: Strategy,
     pub gold: u32,
     pub elixir: u32,
     pub damage: u32,
 }
 
-/// Remembers how each strategy performed and chooses the next one.
+fn default_army() -> String {
+    "Barbarians".into()
+}
+
+/// Remembers how each army and strategy performed and chooses the next ones.
 pub struct Learner {
     log: PathBuf,
     records: Vec<AttackRecord>,
@@ -81,34 +99,59 @@ impl Learner {
         Ok(Self { log, records, explore })
     }
 
-    /// Mean damage and attack count for each strategy.
-    pub fn stats(&self) -> Vec<(Strategy, f64, usize)> {
-        Strategy::ALL
+    /// Mean damage and attack count for each option, grouping records by `key`.
+    pub fn stats<T: Clone + PartialEq>(
+        &self,
+        options: &[T],
+        key: impl Fn(&AttackRecord) -> T,
+    ) -> Vec<(T, f64, usize)> {
+        options
             .iter()
-            .map(|&s| {
+            .map(|o| {
                 let damages: Vec<u32> =
-                    self.records.iter().filter(|r| r.strategy == s).map(|r| r.damage).collect();
+                    self.records.iter().filter(|r| key(r) == *o).map(|r| r.damage).collect();
                 let mean = if damages.is_empty() {
                     0.0
                 } else {
                     damages.iter().sum::<u32>() as f64 / damages.len() as f64
                 };
-                (s, mean, damages.len())
+                (o.clone(), mean, damages.len())
             })
             .collect()
     }
 
-    /// Tries every strategy once, then mostly uses the best one while
+    /// Tries every option once, then mostly uses the best one while
     /// occasionally exploring the others.
-    pub fn choose(&self) -> Strategy {
-        let stats = self.stats();
-        if let Some(&(s, _, _)) = stats.iter().find(|(_, _, n)| *n == 0) {
-            return s;
+    fn pick<T: Clone + PartialEq>(&self, options: &[T], key: impl Fn(&AttackRecord) -> T) -> T {
+        let stats = self.stats(options, key);
+        if let Some((o, _, _)) = stats.iter().find(|(_, _, n)| *n == 0) {
+            return o.clone();
         }
         if fastrand::f64() < self.explore {
-            return Strategy::ALL[fastrand::usize(..Strategy::ALL.len())];
+            return options[fastrand::usize(..options.len())].clone();
         }
-        stats.iter().max_by(|a, b| a.1.total_cmp(&b.1)).map(|s| s.0).unwrap()
+        stats.into_iter().max_by(|a, b| a.1.total_cmp(&b.1)).map(|s| s.0).unwrap()
+    }
+
+    pub fn choose_strategy(&self) -> Strategy {
+        self.pick(&Strategy::ALL, |r| r.strategy)
+    }
+
+    /// Chooses among army names (the strongest few the account can build).
+    pub fn choose_army(&self, names: &[String]) -> String {
+        self.pick(names, |r| r.army.clone())
+    }
+
+    pub fn strategy_stats(&self) -> Vec<(Strategy, f64, usize)> {
+        self.stats(&Strategy::ALL, |r| r.strategy)
+    }
+
+    /// Stats for every army that has been used at least once.
+    pub fn army_stats(&self) -> Vec<(String, f64, usize)> {
+        let mut names: Vec<String> = self.records.iter().map(|r| r.army.clone()).collect();
+        names.sort();
+        names.dedup();
+        self.stats(&names, |r| r.army.clone())
     }
 
     pub fn record(&mut self, record: AttackRecord) -> Result<()> {
@@ -151,20 +194,32 @@ mod tests {
         assert_eq!(Strategy::FourCorners.points(&z).len(), 4);
     }
 
+    fn rec(army: &str, strategy: Strategy, damage: u32) -> AttackRecord {
+        AttackRecord { unix_time: 0, army: army.into(), strategy, gold: 0, elixir: 0, damage }
+    }
+
     #[test]
-    fn untried_strategies_come_first() {
+    fn untried_options_come_first_then_the_best() {
         let mut l = Learner { log: PathBuf::new(), records: Vec::new(), explore: 0.0 };
         for s in [Strategy::OneSide, Strategy::TwoSides, Strategy::FourCorners] {
-            l.records.push(AttackRecord { unix_time: 0, strategy: s, gold: 0, elixir: 0, damage: 50 });
+            l.records.push(rec("Barch", s, 50));
         }
-        assert_eq!(l.choose(), Strategy::Surround);
-        l.records.push(AttackRecord {
-            unix_time: 0,
-            strategy: Strategy::Surround,
-            gold: 0,
-            elixir: 0,
-            damage: 90,
-        });
-        assert_eq!(l.choose(), Strategy::Surround);
+        assert_eq!(l.choose_strategy(), Strategy::Surround);
+        l.records.push(rec("Barch", Strategy::Surround, 90));
+        assert_eq!(l.choose_strategy(), Strategy::Surround);
+
+        let armies = ["Barch".to_string(), "GiBarch".to_string()];
+        assert_eq!(l.choose_army(&armies), "GiBarch");
+        l.records.push(rec("GiBarch", Strategy::OneSide, 95));
+        assert_eq!(l.choose_army(&armies), "GiBarch");
+    }
+
+    #[test]
+    fn old_records_without_army_count_as_barbarians() {
+        let r: AttackRecord = serde_json::from_str(
+            r#"{"unix_time":1,"strategy":"OneSide","gold":0,"elixir":0,"damage":100}"#,
+        )
+        .unwrap();
+        assert_eq!(r.army, "Barbarians");
     }
 }

@@ -1,3 +1,4 @@
+mod army;
 mod bot;
 mod strategy;
 
@@ -8,11 +9,13 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use device::{Device, DeviceConfig};
 use serde::Deserialize;
+use army::Catalog;
 use bot::SearchConfig;
 use strategy::Learner;
 use vision::ocr::{Ocr, TextColor};
 use vision::{Button, Vision};
 
+const ASSETS_DIR: &str = "assets";
 const TEMPLATES_DIR: &str = "assets/templates";
 const MODELS_DIR: &str = "models";
 const ATTACK_LOG: &str = "data/attacks.jsonl";
@@ -61,7 +64,9 @@ enum Cmd {
         #[arg(long, default_value_t = 1)]
         count: u32,
     },
-    /// Search for bases and attack them, learning which deploy strategy works best.
+    /// Pick the best army for the unlocked troops and set it in the army editor.
+    Army,
+    /// Search for bases and attack them, learning which army and deploy strategy work best.
     Attack {
         #[arg(long, default_value_t = 1)]
         count: u32,
@@ -213,11 +218,16 @@ fn main() -> Result<()> {
             let mut learner = Learner::load(PathBuf::from(ATTACK_LOG), config.search.explore)?;
             for i in 1..=count {
                 tracing::info!("multiplayer attack {i}/{count}");
-                if !bot.multiplayer_attack(&config.search, &mut learner)? {
+                let (name, army) = bot.prepare_army(&learner)?;
+                if !bot.multiplayer_attack(&config.search, &mut learner, &name, &army)? {
                     break;
                 }
             }
             print_stats(&learner);
+        }
+        Cmd::Army => {
+            let learner = Learner::load(PathBuf::from(ATTACK_LOG), config.search.explore)?;
+            make_bot(device)?.prepare_army(&learner)?;
         }
         Cmd::Stats | Cmd::Crop { .. } | Cmd::Ocr { .. } | Cmd::Plan { .. } => {
             unreachable!("handled before connecting")
@@ -231,12 +241,18 @@ fn make_bot(device: Device) -> Result<bot::Bot> {
         device,
         Vision::load(Path::new(TEMPLATES_DIR))?,
         Ocr::load(Path::new(MODELS_DIR))?,
+        Catalog::load(Path::new(ASSETS_DIR))?,
     ))
 }
 
 fn print_stats(learner: &Learner) {
-    for (strategy, mean, n) in learner.stats() {
-        tracing::info!("  {:<12} {n:>3} attacks, mean damage {mean:.1}%", format!("{strategy:?}"));
+    tracing::info!("by army:");
+    for (army, mean, n) in learner.army_stats() {
+        tracing::info!("  {army:<16} {n:>3} attacks, mean damage {mean:.1}%");
+    }
+    tracing::info!("by deploy strategy:");
+    for (strategy, mean, n) in learner.strategy_stats() {
+        tracing::info!("  {:<16} {n:>3} attacks, mean damage {mean:.1}%", format!("{strategy:?}"));
     }
 }
 

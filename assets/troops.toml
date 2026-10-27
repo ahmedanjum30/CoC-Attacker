@@ -1,0 +1,96 @@
+# Elixir troops in the order the army editor shows them (column by column,
+# top row then bottom row). `housing` is camp space per troop.
+#
+# Roles decide deploy order: tanks go first to soak damage, wall breakers
+# open the way, damage dealers follow, support comes last.
+# Values reflect the game when this file was written; edit if they change.
+
+[[troop]]
+name = "Barbarian"
+housing = 1
+role = "damage"
+
+[[troop]]
+name = "Archer"
+housing = 1
+role = "damage"
+
+[[troop]]
+name = "Giant"
+housing = 5
+role = "tank"
+
+[[troop]]
+name = "Goblin"
+housing = 1
+role = "raider"
+
+[[troop]]
+name = "Wall Breaker"
+housing = 2
+role = "wall_breaker"
+
+[[troop]]
+name = "Balloon"
+housing = 5
+role = "air"
+
+[[troop]]
+name = "Wizard"
+housing = 4
+role = "damage"
+
+[[troop]]
+name = "Healer"
+housing = 14
+role = "support"
+
+[[troop]]
+name = "Dragon"
+housing = 20
+role = "air"
+
+[[troop]]
+name = "P.E.K.K.A"
+housing = 25
+role = "tank"
+
+[[troop]]
+name = "Baby Dragon"
+housing = 10
+role = "air"
+
+[[troop]]
+name = "Miner"
+housing = 6
+role = "damage"
+
+[[troop]]
+name = "Electro Dragon"
+housing = 30
+role = "air"
+
+[[troop]]
+name = "Yeti"
+housing = 18
+role = "tank"
+
+[[troop]]
+name = "Dragon Rider"
+housing = 25
+role = "air"
+
+[[troop]]
+name = "Electro Titan"
+housing = 32
+role = "tank"
+
+[[troop]]
+name = "Root Rider"
+housing = 20
+role = "tank"
+
+[[troop]]
+name = "Thrower"
+housing = 16
+role = "damage"

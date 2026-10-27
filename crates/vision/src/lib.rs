@@ -29,10 +29,13 @@ pub enum Button {
     ReturnHome,
     ArmyAttack,
     CloseWindow,
+    Okay,
+    /// The camp icon before the "x/y" capacity, present in every army window layout.
+    ArmyCampIcon,
 }
 
 impl Button {
-    pub const ALL: [Button; 10] = [
+    pub const ALL: [Button; 12] = [
         Button::HomeBattle,
         Button::MenuPracticeTab,
         Button::FindMatch,
@@ -43,6 +46,8 @@ impl Button {
         Button::ReturnHome,
         Button::ArmyAttack,
         Button::CloseWindow,
+        Button::Okay,
+        Button::ArmyCampIcon,
     ];
 
     fn file_name(self) -> &'static str {
@@ -57,6 +62,8 @@ impl Button {
             Button::ReturnHome => "return_home.png",
             Button::ArmyAttack => "army_attack.png",
             Button::CloseWindow => "close_x.png",
+            Button::Okay => "okay.png",
+            Button::ArmyCampIcon => "army_camp_icon.png",
         }
     }
 
@@ -74,6 +81,8 @@ impl Button {
             Button::ReturnHome => Rect::at(480, 540).of_size(320, 160),
             Button::ArmyAttack => Rect::at(980, 590).of_size(290, 100),
             Button::CloseWindow => Rect::at(1170, 20).of_size(110, 90),
+            Button::Okay => Rect::at(600, 380).of_size(360, 160),
+            Button::ArmyCampIcon => Rect::at(360, 135).of_size(60, 60),
         }
     }
 }
@@ -83,6 +92,8 @@ pub enum Screen {
     Home,
     BattleMenu,
     ArmyWindow,
+    /// Some other window or popup with a close button.
+    Window,
     /// Looking at an enemy base before deploying; Next is available.
     Scouting,
     Battle,
@@ -183,8 +194,10 @@ impl Vision {
             Screen::Scouting
         } else if visible(Button::EndBattle) || visible(Button::Surrender) {
             Screen::Battle
-        } else if visible(Button::ArmyAttack) {
+        } else if visible(Button::ArmyCampIcon) {
             Screen::ArmyWindow
+        } else if visible(Button::CloseWindow) {
+            Screen::Window
         } else if visible(Button::MenuPracticeTab) {
             Screen::BattleMenu
         } else if visible(Button::HomeBattle) {
